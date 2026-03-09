@@ -5,7 +5,6 @@ import "./ModifierProtection.sol";
 
 contract Vault is ModifierProtection {
     mapping (address => uint256) public balances;
-    uint256 public totalVaultValue;
 
     event Deposit(address indexed depositor, uint256 amount);
     event Withdrawal(address indexed withdrawer, uint256 amount);

@@ -22,15 +22,17 @@ contract Merkle is ModifierProtection {
 
     function claim( bytes32[] calldata proof, uint256 amount) external whenNotPaused {
 
-        bytes32 leaf = keccak256(abi.encodePacked(msg.sender, amount));
+        bytes32 leaf = keccak256(
+            bytes.concat(keccak256(abi.encodePacked(msg.sender, amount)))
+        );
 
-        bytes32 computed = MerkleProof.processProof(proof, leaf);
-
-        require(computed == merkleRoot, "Invalid proof");
+        require(MerkleProof.verify(proof, merkleRoot, leaf), "Invalid proof");
 
         require(!claimed[msg.sender], "Already claimed");
 
         claimed[msg.sender] = true;
+
+        totalVaultValue -= amount;
 
         (bool success,) = payable(msg.sender).call{value: amount}("");
 

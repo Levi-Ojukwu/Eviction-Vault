@@ -13,8 +13,8 @@ contract EvictionVaultTest is Test {
     address public owner3 = makeAddr("owner3");
     address public user   = makeAddr("user");
 
-    uint256 public constant THRESHOLD    = 2;
-    uint256 public constant INITIAL_ETH  = 10 ether;
+    uint256 public constant THRESHOLD   = 2;
+    uint256 public constant INITIAL_ETH = 10 ether;
 
     function setUp() public {
         address[] memory owners = new address[](3);
@@ -29,10 +29,9 @@ contract EvictionVaultTest is Test {
         vault = new EvictionVault{value: INITIAL_ETH}(owners, THRESHOLD);
     }
 
-
     function test_DepositAndWithdraw_HappyPath() public {
 
-        uint256 depositAmount   = 1 ether;
+        uint256 depositAmount     = 1 ether;
         uint256 userBalanceBefore = user.balance;
 
         vm.prank(user);
@@ -47,7 +46,6 @@ contract EvictionVaultTest is Test {
         assertEq(vault.balances(user), 0);
         assertEq(user.balance, userBalanceBefore);
     }
-
 
     function test_PauseAndUnpause_BlocksWithdraw() public {
 
@@ -70,7 +68,6 @@ contract EvictionVaultTest is Test {
         vault.withdraw(1 ether);
         assertEq(vault.balances(user), 0);
     }
-
 
     function test_MultiSig_FullFlow() public {
 
@@ -97,13 +94,12 @@ contract EvictionVaultTest is Test {
         assertTrue(executedAfter);
     }
 
-   
     function test_SetMerkleRoot_OnlyOwner() public {
 
         bytes32 root = keccak256("test-root");
 
         vm.prank(user);
-        vm.expectRevert("Not an owner");
+        vm.expectRevert("not an owner");
         vault.setMerkleRoot(root);
 
         vm.prank(owner1);
@@ -111,59 +107,58 @@ contract EvictionVaultTest is Test {
         assertEq(vault.merkleRoot(), root);
     }
 
+    function test_MerkleClaim_ValidProof() public {
 
-    // function test_MerkleClaim_ValidProof() public {
+        uint256 claimAmount = 1 ether;
 
-    //     uint256 claimAmount = 1 ether;
+        // FIX: cast uint256 explicitly — no raw ether literals in encodePacked
+        bytes32 leaf0 = keccak256(bytes.concat(keccak256(abi.encodePacked(user,   uint256(claimAmount)))));
+        bytes32 leaf1 = keccak256(bytes.concat(keccak256(abi.encodePacked(owner3, uint256(2 ether)))));
 
-    //     bytes32 leaf0 = keccak256(bytes.concat(keccak256(abi.encodePacked(user,   claimAmount))));
-    //     bytes32 leaf1 = keccak256(bytes.concat(keccak256(abi.encodePacked(owner3, 2 ether))));
+        bytes32 root;
+        bytes32[] memory proof = new bytes32[](1);
 
-    //     bytes32 root;
-    //     bytes32[] memory proof = new bytes32[](1);
+        if (leaf0 < leaf1) {
+            root     = keccak256(abi.encodePacked(leaf0, leaf1));
+            proof[0] = leaf1;
+        } else {
+            root     = keccak256(abi.encodePacked(leaf1, leaf0));
+            proof[0] = leaf1;
+        }
 
-    //     if (leaf0 < leaf1) {
-    //         root     = keccak256(abi.encodePacked(leaf0, leaf1));
-    //         proof[0] = leaf1;
-    //     } else {
-    //         root     = keccak256(abi.encodePacked(leaf1, leaf0));
-    //         proof[0] = leaf1;
-    //     }
+        vm.prank(owner1);
+        vault.setMerkleRoot(root);
 
-    //     vm.prank(owner1);
-    //     vault.setMerkleRoot(root);
+        uint256 userBefore       = user.balance;
+        uint256 vaultValueBefore = vault.totalVaultValue();
 
-    //     uint256 userBefore       = user.balance;
-    //     uint256 vaultValueBefore = vault.totalVaultValue();
+        vm.prank(user);
+        vault.claim(proof, claimAmount);
 
-    //     vm.prank(user);
-    //     vault.claim(proof, claimAmount);
+        assertEq(user.balance, userBefore + claimAmount);
+        assertTrue(vault.claimed(user));
+        assertEq(vault.totalVaultValue(), vaultValueBefore - claimAmount);
 
-    //     assertEq(user.balance, userBefore + claimAmount);
-    //     assertTrue(vault.claimed(user));
-    //     assertEq(vault.totalVaultValue(), vaultValueBefore - claimAmount);
+        // Replay must fail
+        vm.prank(user);
+        vm.expectRevert("Already claimed");
+        vault.claim(proof, claimAmount);
+    }
 
-    //     // Replay must fail
-    //     vm.prank(user);
-    //     vm.expectRevert("Already claimed");
-    //     vault.claim(proof, claimAmount);
-    // }
+    function test_EmergencyWithdrawAll_OnlyOwner() public {
 
-  
-    // function test_EmergencyWithdrawAll_OnlyOwner() public {
+        vm.prank(user);
+        vm.expectRevert("not an owner");
+        vault.emergencyWithdrawAll();
 
-    //     vm.prank(user);
-    //     vm.expectRevert("Not an owner");
-    //     vault.emergencyWithdrawAll();
+        uint256 owner1Before = owner1.balance;
+        uint256 vaultBalance = address(vault).balance;
 
-    //     uint256 owner1Before = owner1.balance;
-    //     uint256 vaultBalance = address(vault).balance;
+        vm.prank(owner1);
+        vault.emergencyWithdrawAll();
 
-    //     vm.prank(owner1);
-    //     vault.emergencyWithdrawAll();
-
-    //     assertEq(address(vault).balance, 0);
-    //     assertEq(vault.totalVaultValue(), 0);
-    //     assertEq(owner1.balance, owner1Before + vaultBalance);
-    // }
+        assertEq(address(vault).balance, 0);
+        assertEq(vault.totalVaultValue(), 0);
+        assertEq(owner1.balance, owner1Before + vaultBalance);
+    }
 }
