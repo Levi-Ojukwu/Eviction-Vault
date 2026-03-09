@@ -1,66 +1,81 @@
-## Foundry
+# EvictionVault — Security Refactor
 
-**Foundry is a blazing fast, portable and modular toolkit for Ethereum application development written in Rust.**
+**Task:** Structural refactor + critical vulnerability mitigation
 
-Foundry consists of:
+---
 
--   **Forge**: Ethereum testing framework (like Truffle, Hardhat and DappTools).
--   **Cast**: Swiss army knife for interacting with EVM smart contracts, sending transactions and getting chain data.
--   **Anvil**: Local Ethereum node, akin to Ganache, Hardhat Network.
--   **Chisel**: Fast, utilitarian, and verbose solidity REPL.
+## Vulnerabilities Fixed
 
-## Documentation
+### 1. setMerkleRoot callable by anyone (CRITICAL)
+Originally no access control. Anyone could replace the Merkle root mid-distribution.
+Also, attacker sets a root where every address can claim the entire vault.
 
-https://book.getfoundry.sh/
+Fix:  Added onlyOwner modifier, so only the owner can set the merkle root.
 
-## Usage
+### 2. emergencyWithdrawAll public drain (CRITICAL)
+This also had no access control. Due to that, any address could drain 100% of vault funds instantly.
 
-### Build
+Fix: Added onlyOwner modifier.
 
-```shell
-$ forge build
-```
+### 3. receive() used tx.origin (HIGH)
+Originally the balances used [tx.origin] += msg.value
+Malicious contract tricks victim. tx.origin is victim but msg.sender is
+          attacker's contract — credits go to the wrong address.
 
-### Test
+Fix: Replaced with msg.sender throughout.
 
-```shell
-$ forge test
-```
+### 4. .transfer() in withdraw() and claim() (HIGH)
+The contract used payable(msg.sender).transfer(amount)
+And .transfer() forwards only 2,300 gas. , smart-contract
+          
+Fix:  (bool success,) = payable(msg.sender).call{value: amount}("");
+      require(success, "Transfer failed");
 
-### Format
+### 5. Timelock bypass — executionTime could be 0 (MEDIUM)
+Original: require(block.timestamp >= txn.executionTime)
+Problem:  When executionTime == 0 (threshold not met), this is always true.
+          Any partially-confirmed transaction executes immediately.
+Fix:      Added require(txn.executionTime != 0, "Timelock not started") first.
 
-```shell
-$ forge fmt
-```
+### 6. Single-hash Merkle leaf — second preimage attack (HIGH)
+This was NOT fixed in the provided refactor.
+Original: keccak256(abi.encodePacked(msg.sender, amount))
+Problem:  OZ MerkleProof hashes node pairs the same way. An attacker can pass an
+          internal tree node as a leaf, bypassing the proof entirely.
+Fix:      keccak256(bytes.concat(keccak256(abi.encodePacked(msg.sender, amount))))
+          Double-hashing makes leaves structurally distinct from internal nodes.
+Note:     Off-chain Merkle tree generation must also double-hash leaves to match.
 
-### Gas Snapshots
+---
 
-```shell
-$ forge snapshot
-```
+## Additional Fixes Not in Provided Solution
 
-### Anvil
+| Issue                                          | Fix                                          |
+|------------------------------------------------|----------------------------------------------|
+| threshold > ownerCount allowed in constructor  | require(_threshold <= _owners.length)        |
+| Duplicate owners not checked in constructor    | require(!isOwner[owner], "Duplicate owner")  |
+| Constructor ETH untracked in balances[]        | Credits balances[msg.sender] for msg.value   |
+| totalVaultValue not decremented in claim()     | Deducted before external call (CEI)          |
+| pause not enforced in submitTransaction()      | Added whenNotPaused                          |
+| pause not enforced in confirmTransaction()     | Added whenNotPaused                          |
+| MerkleProof.recover() does not exist           | Function removed; use OZ ECDSA if needed     |
+| ownerCount not tracked after split             | Added ownerCount to SecurityModifiers        |
 
-```shell
-$ anvil
-```
+---
 
-### Deploy
+## Security Patterns Used
 
-```shell
-$ forge script script/Counter.s.sol:CounterScript --rpc-url <your_rpc_url> --private-key <your_private_key>
-```
+Checks-Effects-Interactions (CEI):
+  All state changes happen before external calls.
+  No ReentrancyGuard needed — the pattern itself prevents reentrancy.
 
-### Cast
+Modifier centralisation:
+  onlyOwner and whenNotPaused defined once in SecurityModifiers,
+  inherited by all modules — no copy-paste drift possible.
 
-```shell
-$ cast <subcommand>
-```
+Double-hash Merkle leaves:
+  Prevents second preimage attacks against OZ MerkleProof library.
 
-### Help
+.call() over .transfer():
+  Future-proof ETH forwarding compatible with smart-contract receivers.
 
-```shell
-$ forge --help
-$ anvil --help
-$ cast --help
-```
